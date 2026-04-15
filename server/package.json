@@ -1,0 +1,27 @@
+{
+  "name": "afip-server",
+  "version": "1.0.0",
+  "description": "Servidor de facturación AFIP - Node.js + Fastify",
+  "main": "dist/server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
+  },
+  "keywords": ["afip", "facturacion", "electronica", "fastify"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "fastify": "^4.28.1",
+    "dotenv": "^16.4.5",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.2",
+    "@types/uuid": "^9.0.8",
+    "typescript": "^5.4.5",
+    "tsx": "^4.15.6"
+  }
+}

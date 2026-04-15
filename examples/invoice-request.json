@@ -1,0 +1,23 @@
+{
+  "client_name": "Empresa S.A.",
+  "client_cuit": "30711223334",
+  "client_address": "Av. Corrientes 1234, CABA",
+  "client_email": "facturacion@empresa.com.ar",
+  "invoice_type": 1,
+  "invoice_letter": "A",
+  "items": [
+    {
+      "description": "Producto de ejemplo",
+      "quantity": 2,
+      "unit_price": 1000,
+      "iva_rate": 21
+    },
+    {
+      "description": "Servicio de consultoría",
+      "quantity": 10,
+      "unit_price": 5000,
+      "iva_rate": 21
+    }
+  ],
+  "fecha": "2026-04-15"
+}

@@ -1,0 +1,39 @@
+# =============================================================================
+# API AFIP - .gitignore
+# =============================================================================
+
+# Node.js
+node_modules/
+dist/
+build/
+*.log
+
+# Environment
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cloudflare
+.wrangler/
+.dev.vars
+
+# AFIP production credentials
+*.crt
+*.key
+*.pem
+
+# Testing
+coverage/
+
+# Misc
+*.tgz
