@@ -1,24 +1,11 @@
 name = "afip-api"
 main = "src/index.ts"
 compatibility_date = "2024-04-15"
-node_compat = false
 
 [vars]
 ENV = "development"
 
-# Secrets a configurar via wrangler:
+# Secrets a configurar via:
 # wrangler secret put PUBLIC_API_KEY
-# wrangler secret put INTERNAL_API_KEY  
+# wrangler secret put INTERNAL_API_KEY
 # wrangler secret put AFIP_SERVICE_URL
-
-[[routers]]
-name = "afip-router"
-pattern = "{prefix}"
-
-[[routers.rules]]
-name = "public"
-pattern = "public/*"
-
-[[unsafe.bindings]]
-name = "AFIP_SERVICE_KV"
-namespace_id = "AFIP_SERVICE_KV"

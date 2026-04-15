@@ -9,7 +9,7 @@
  * Cliente → Worker → (Cloudflare Tunnel) → Server Local → AFIP
  */
 
-import { Context } from './types';
+import type { KVNamespace } from '@cloudflare/workers-types';
 
 // ==================== CONSTANTS ====================
 
@@ -23,24 +23,14 @@ const RATE_LIMIT = {
 
 // ==================== ENVIRONMENT ====================
 
-interface Env {
-  // Secrets configuradas via wrangler secret
+interface WorkerEnv {
   PUBLIC_API_KEY: string;
   INTERNAL_API_KEY: string;
   AFIP_SERVICE_URL: string;
-  
-  // Variables normales
   ENV?: string;
   VERSION?: string;
+  AFIP_SERVICE_KV?: KVNamespace;
 }
-
-type WorkerEnv = {
-  PUBLIC_API_KEY: string;
-  INTERNAL_API_KEY: string;
-  AFIP_SERVICE_URL: string;
-  ENV?: string;
-  VERSION?: string;
-};
 
 // ==================== VALIDATION ====================
 
@@ -133,19 +123,14 @@ function validateInvoiceRequest(body: any): {
 
 // ==================== RATE LIMITING ====================
 
-/**
- * Simple rate limiter usando KV o en memoria
- * Nota: En producción, usar Durable Objects o KV para persistencia
- */
 async function checkRateLimit(
-  ctx: Context,
+  env: WorkerEnv,
   apiKey: string
 ): Promise<{ allowed: boolean; remaining: number; resetAt: number }> {
   const now = Date.now();
   const key = `rate_limit:${apiKey}`;
   
-  // Intentar usar KV si está disponible
-  const kv = ctx.env.AFIP_SERVICE_KV as KVNamespace | undefined;
+  const kv = env.AFIP_SERVICE_KV;
   
   if (kv) {
     try {
@@ -155,7 +140,6 @@ async function checkRateLimit(
       } | null;
       
       if (!stored || now > stored.resetAt) {
-        // Nueva ventana
         await kv.put(key, JSON.stringify({
           count: 1,
           resetAt: now + RATE_LIMIT.windowMs
@@ -179,20 +163,15 @@ async function checkRateLimit(
         resetAt: stored.resetAt 
       };
     } catch {
-      // Si falla KV, permitir request
       return { allowed: true, remaining: RATE_LIMIT.requests, resetAt: now + RATE_LIMIT.windowMs };
     }
   }
   
-  // Sin KV, permitir todo (development)
   return { allowed: true, remaining: RATE_LIMIT.requests, resetAt: now + RATE_LIMIT.windowMs };
 }
 
 // ==================== AUTHENTICATION ====================
 
-/**
- * Autentica el request del cliente
- */
 function authenticate(
   headers: Headers,
   env: WorkerEnv
@@ -203,10 +182,6 @@ function authenticate(
     return { valid: false, error: 'Missing API key (x-api-key or Authorization header)' };
   }
   
-  // Soportar varios formatos:
-  // x-api-key: <key>
-  // authorization: ApiKey <key>
-  // authorization: Bearer <key>
   let apiKey = authHeader;
   if (authHeader.startsWith('ApiKey ') || authHeader.startsWith('Bearer ')) {
     apiKey = authHeader.substring(authHeader.indexOf(' ') + 1);
@@ -221,11 +196,8 @@ function authenticate(
 
 // ==================== PROXY TO SERVER ====================
 
-/**
- * Reenvía request al servidor local
- */
 async function proxyToServer(
-  ctx: Context,
+  request: Request,
   invoiceData: InvoiceRequest,
   env: WorkerEnv
 ): Promise<{
@@ -250,7 +222,6 @@ async function proxyToServer(
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${env.INTERNAL_API_KEY}`,
         'X-Forwarded-By': 'cloudflare-worker',
-        'X-Request-Id': ctx.request.id,
       },
       body: JSON.stringify(invoiceData),
     });
@@ -263,10 +234,6 @@ async function proxyToServer(
       status: response.status,
     };
   } catch (error) {
-    ctx.waitUntil(
-      fetch(serviceUrl + '/health').catch(() => {})
-    );
-    
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to connect to backend',
@@ -276,15 +243,12 @@ async function proxyToServer(
 
 // ==================== HANDLERS ====================
 
-/**
- * POST /invoices - Crear factura
- */
 async function handleCreateInvoice(
-  ctx: Context,
+  request: Request,
   env: WorkerEnv
 ): Promise<Response> {
   // 1. Autenticar
-  const auth = authenticate(ctx.request.headers, env);
+  const auth = authenticate(request.headers, env);
   if (!auth.valid) {
     return new Response(JSON.stringify({
       error: 'UNAUTHORIZED',
@@ -296,7 +260,7 @@ async function handleCreateInvoice(
   }
   
   // 2. Rate limiting
-  const rateLimit = await checkRateLimit(ctx, auth.apiKey!);
+  const rateLimit = await checkRateLimit(env, auth.apiKey!);
   if (!rateLimit.allowed) {
     return new Response(JSON.stringify({
       error: 'RATE_LIMITED',
@@ -315,7 +279,7 @@ async function handleCreateInvoice(
   // 3. Parsear body
   let body: any;
   try {
-    body = await ctx.request.json();
+    body = await request.json();
   } catch {
     return new Response(JSON.stringify({
       error: 'INVALID_REQUEST',
@@ -340,7 +304,7 @@ async function handleCreateInvoice(
   }
   
   // 5. Reenviar al servidor
-  const result = await proxyToServer(ctx, body as InvoiceRequest, env);
+  const result = await proxyToServer(request, body as InvoiceRequest, env);
   
   if (!result.success) {
     return new Response(JSON.stringify({
@@ -367,15 +331,12 @@ async function handleCreateInvoice(
   }
 }
 
-/**
- * GET /health - Health check
- */
-async function handleHealth(ctx: Context): Promise<Response> {
+function handleHealth(env: WorkerEnv): Response {
   return new Response(JSON.stringify({
     status: 'ok',
     service: 'afip-api',
     timestamp: new Date().toISOString(),
-    version: ctx.env.VERSION || '1.0.0'
+    version: env.VERSION || '1.0.0'
   }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' }
@@ -385,21 +346,21 @@ async function handleHealth(ctx: Context): Promise<Response> {
 // ==================== MAIN HANDLER ====================
 
 export default {
-  async fetch(request: Request, env: WorkerEnv, ctx: Context): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
     
     // Logging
-    console.log(`${method} ${path} - ${request.headers.get('cf-ray')?.substring(0, 8)}`);
+    console.log(`${method} ${path}`);
     
     // Rutas
     if (path === '/invoices' && method === 'POST') {
-      return handleCreateInvoice({ request, env, ctx }, env);
+      return handleCreateInvoice(request, env);
     }
     
     if (path === '/health' && method === 'GET') {
-      return handleHealth({ request, env, ctx });
+      return handleHealth(env);
     }
     
     // 404
@@ -411,4 +372,4 @@ export default {
       headers: { 'Content-Type': 'application/json' }
     });
   }
-} satisfies ExportedHandler<WorkerEnv, Context>;
+};
