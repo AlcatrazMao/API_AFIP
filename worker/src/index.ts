@@ -1,375 +1,85 @@
 /**
- * AFIP API - Cloudflare Worker
- * 
- * API Gateway para facturación electrónica AFIP.
- * Este worker actúa como capa de seguridad y validación
- * antes de reenviar requests al servidor local.
- * 
- * ARQUITECTURA:
- * Cliente → Worker → (Cloudflare Tunnel) → Server Local → AFIP
+ * AFIP API - Cloudflare Worker (Simplified)
  */
 
-import type { KVNamespace } from '@cloudflare/workers-types';
-
-// ==================== CONSTANTS ====================
-
-const INTERNAL_ENDPOINT = '/process';
-
-// Rate limiting: requests por ventana de tiempo
-const RATE_LIMIT = {
-  requests: 100,
-  windowMs: 60 * 1000, // 1 minuto
-};
-
-// ==================== ENVIRONMENT ====================
-
-interface WorkerEnv {
+interface Env {
   PUBLIC_API_KEY: string;
   INTERNAL_API_KEY: string;
   AFIP_SERVICE_URL: string;
-  ENV?: string;
-  VERSION?: string;
-  AFIP_SERVICE_KV?: KVNamespace;
 }
-
-// ==================== VALIDATION ====================
-
-interface InvoiceRequest {
-  tenant_id?: string;
-  client_name: string;
-  client_cuit: string;
-  client_address?: string;
-  client_email?: string;
-  invoice_type: number;
-  invoice_letter: 'A' | 'B' | 'C' | 'E' | 'M';
-  items: InvoiceItem[];
-  fecha?: string;
-}
-
-interface InvoiceItem {
-  description: string;
-  quantity: number;
-  unit_price: number;
-  iva_rate: number;
-}
-
-/**
- * Valida el request de factura
- */
-function validateInvoiceRequest(body: any): {
-  valid: boolean;
-  errors: string[];
-} {
-  const errors: string[] = [];
-  
-  if (!body) {
-    errors.push('Request body is required');
-    return { valid: false, errors };
-  }
-  
-  // Client name
-  if (!body.client_name || typeof body.client_name !== 'string' || body.client_name.length < 1) {
-    errors.push('client_name is required and must be a non-empty string');
-  }
-  
-  // Client CUIT
-  if (!body.client_cuit || typeof body.client_cuit !== 'string') {
-    errors.push('client_cuit is required');
-  } else {
-    const cuit = body.client_cuit.replace(/-/g, '');
-    if (!/^\d{11}$/.test(cuit)) {
-      errors.push('client_cuit must be 11 digits (without dashes)');
-    }
-  }
-  
-  // Invoice type
-  if (body.invoice_type === undefined) {
-    errors.push('invoice_type is required');
-  } else if (typeof body.invoice_type !== 'number') {
-    errors.push('invoice_type must be a number');
-  } else if (body.invoice_type < 1 || body.invoice_type > 200) {
-    errors.push('invoice_type must be between 1 and 200');
-  }
-  
-  // Invoice letter
-  if (!body.invoice_letter) {
-    errors.push('invoice_letter is required');
-  } else if (!['A', 'B', 'C', 'E', 'M'].includes(body.invoice_letter)) {
-    errors.push('invoice_letter must be A, B, C, E, or M');
-  }
-  
-  // Items
-  if (!body.items || !Array.isArray(body.items) || body.items.length === 0) {
-    errors.push('items is required and must not be empty');
-  } else {
-    body.items.forEach((item: any, index: number) => {
-      if (!item.description || typeof item.description !== 'string') {
-        errors.push(`items[${index}].description is required`);
-      }
-      if (!item.quantity || typeof item.quantity !== 'number' || item.quantity <= 0) {
-        errors.push(`items[${index}].quantity must be greater than 0`);
-      }
-      if (!item.unit_price || typeof item.unit_price !== 'number' || item.unit_price < 0) {
-        errors.push(`items[${index}].unit_price must be greater than or equal to 0`);
-      }
-      if (item.iva_rate === undefined || typeof item.iva_rate !== 'number') {
-        errors.push(`items[${index}].iva_rate is required`);
-      }
-    });
-  }
-  
-  return { valid: errors.length === 0, errors };
-}
-
-// ==================== RATE LIMITING ====================
-
-async function checkRateLimit(
-  env: WorkerEnv,
-  apiKey: string
-): Promise<{ allowed: boolean; remaining: number; resetAt: number }> {
-  const now = Date.now();
-  const key = `rate_limit:${apiKey}`;
-  
-  const kv = env.AFIP_SERVICE_KV;
-  
-  if (kv) {
-    try {
-      const stored = await kv.get(key, 'json') as {
-        count: number;
-        resetAt: number;
-      } | null;
-      
-      if (!stored || now > stored.resetAt) {
-        await kv.put(key, JSON.stringify({
-          count: 1,
-          resetAt: now + RATE_LIMIT.windowMs
-        }), { expirationTtl: 120 });
-        
-        return { allowed: true, remaining: RATE_LIMIT.requests - 1, resetAt: now + RATE_LIMIT.windowMs };
-      }
-      
-      if (stored.count >= RATE_LIMIT.requests) {
-        return { allowed: false, remaining: 0, resetAt: stored.resetAt };
-      }
-      
-      await kv.put(key, JSON.stringify({
-        count: stored.count + 1,
-        resetAt: stored.resetAt
-      }), { expirationTtl: 120 });
-      
-      return { 
-        allowed: true, 
-        remaining: RATE_LIMIT.requests - stored.count - 1, 
-        resetAt: stored.resetAt 
-      };
-    } catch {
-      return { allowed: true, remaining: RATE_LIMIT.requests, resetAt: now + RATE_LIMIT.windowMs };
-    }
-  }
-  
-  return { allowed: true, remaining: RATE_LIMIT.requests, resetAt: now + RATE_LIMIT.windowMs };
-}
-
-// ==================== AUTHENTICATION ====================
-
-function authenticate(
-  headers: Headers,
-  env: WorkerEnv
-): { valid: boolean; error: string; apiKey?: string } {
-  const authHeader = headers.get('x-api-key') || headers.get('authorization');
-  
-  if (!authHeader) {
-    return { valid: false, error: 'Missing API key (x-api-key or Authorization header)' };
-  }
-  
-  let apiKey = authHeader;
-  if (authHeader.startsWith('ApiKey ') || authHeader.startsWith('Bearer ')) {
-    apiKey = authHeader.substring(authHeader.indexOf(' ') + 1);
-  }
-  
-  if (apiKey !== env.PUBLIC_API_KEY) {
-    return { valid: false, error: 'Invalid API key' };
-  }
-  
-  return { valid: true, apiKey };
-}
-
-// ==================== PROXY TO SERVER ====================
-
-async function proxyToServer(
-  request: Request,
-  invoiceData: InvoiceRequest,
-  env: WorkerEnv
-): Promise<{
-  success: boolean;
-  data?: any;
-  error?: string;
-  status?: number;
-}> {
-  const serviceUrl = env.AFIP_SERVICE_URL;
-  
-  if (!serviceUrl) {
-    return { 
-      success: false, 
-      error: 'Backend not configured. Please set AFIP_SERVICE_URL.' 
-    };
-  }
-  
-  try {
-    const response = await fetch(`${serviceUrl}${INTERNAL_ENDPOINT}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${env.INTERNAL_API_KEY}`,
-        'X-Forwarded-By': 'cloudflare-worker',
-      },
-      body: JSON.stringify(invoiceData),
-    });
-    
-    const data = await response.json();
-    
-    return {
-      success: response.ok,
-      data,
-      status: response.status,
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to connect to backend',
-    };
-  }
-}
-
-// ==================== HANDLERS ====================
-
-async function handleCreateInvoice(
-  request: Request,
-  env: WorkerEnv
-): Promise<Response> {
-  // 1. Autenticar
-  const auth = authenticate(request.headers, env);
-  if (!auth.valid) {
-    return new Response(JSON.stringify({
-      error: 'UNAUTHORIZED',
-      message: auth.error
-    }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-  
-  // 2. Rate limiting
-  const rateLimit = await checkRateLimit(env, auth.apiKey!);
-  if (!rateLimit.allowed) {
-    return new Response(JSON.stringify({
-      error: 'RATE_LIMITED',
-      message: 'Too many requests',
-      retry_after: Math.ceil((rateLimit.resetAt - Date.now()) / 1000)
-    }), {
-      status: 429,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-RateLimit-Remaining': '0',
-        'X-RateLimit-Reset': rateLimit.resetAt.toString()
-      }
-    });
-  }
-  
-  // 3. Parsear body
-  let body: any;
-  try {
-    body = await request.json();
-  } catch {
-    return new Response(JSON.stringify({
-      error: 'INVALID_REQUEST',
-      message: 'Invalid JSON body'
-    }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-  
-  // 4. Validar request
-  const validation = validateInvoiceRequest(body);
-  if (!validation.valid) {
-    return new Response(JSON.stringify({
-      error: 'VALIDATION_ERROR',
-      message: 'Invalid request data',
-      details: validation.errors
-    }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-  
-  // 5. Reenviar al servidor
-  const result = await proxyToServer(request, body as InvoiceRequest, env);
-  
-  if (!result.success) {
-    return new Response(JSON.stringify({
-      error: 'BACKEND_ERROR',
-      message: result.error || 'Failed to process invoice',
-      ...(result.status ? { status: result.status } : {})
-    }), {
-      status: result.status || 502,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-  
-  // 6. Responder
-  return new Response(JSON.stringify({
-    success: true,
-    data: result.data
-  }), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-RateLimit-Remaining': rateLimit.remaining.toString()
-      }
-    });
-  }
-}
-
-function handleHealth(env: WorkerEnv): Response {
-  return new Response(JSON.stringify({
-    status: 'ok',
-    service: 'afip-api',
-    timestamp: new Date().toISOString(),
-    version: env.VERSION || '1.0.0'
-  }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' }
-  });
-}
-
-// ==================== MAIN HANDLER ====================
 
 export default {
-  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
-    const method = request.method;
     
-    // Logging
-    console.log(`${method} ${path}`);
-    
-    // Rutas
-    if (path === '/invoices' && method === 'POST') {
-      return handleCreateInvoice(request, env);
+    // Health check
+    if (path === '/health' && request.method === 'GET') {
+      return new Response(JSON.stringify({ 
+        status: 'ok', 
+        service: 'afip-api' 
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
     
-    if (path === '/health' && method === 'GET') {
-      return handleHealth(env);
+    // Crear factura
+    if (path === '/invoices' && request.method === 'POST') {
+      // Autenticar
+      const apiKey = request.headers.get('x-api-key') || request.headers.get('authorization');
+      if (!apiKey || apiKey !== env.PUBLIC_API_KEY) {
+        return new Response(JSON.stringify({ 
+          error: 'UNAUTHORIZED', 
+          message: 'Invalid API key' 
+        }), { status: 401 });
+      }
+      
+      // Validar body
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return new Response(JSON.stringify({ 
+          error: 'INVALID_REQUEST', 
+          message: 'Invalid JSON' 
+        }), { status: 400 });
+      }
+      
+      // Reenviar al servidor
+      if (!env.AFIP_SERVICE_URL) {
+        return new Response(JSON.stringify({ 
+          error: 'BACKEND_ERROR', 
+          message: 'Backend not configured' 
+        }), { status: 502 });
+      }
+      
+      try {
+        const response = await fetch(env.AFIP_SERVICE_URL + '/process', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + env.INTERNAL_API_KEY,
+          },
+          body: JSON.stringify(body),
+        });
+        
+        const data = await response.json();
+        return new Response(JSON.stringify(data), {
+          status: response.status,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ 
+          error: 'BACKEND_ERROR', 
+          message: e instanceof Error ? e.message : 'Connection failed' 
+        }), { status: 502 });
+      }
     }
     
     // 404
-    return new Response(JSON.stringify({
-      error: 'NOT_FOUND',
-      message: `Endpoint ${path} not found`
-    }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return new Response(JSON.stringify({ 
+      error: 'NOT_FOUND', 
+      message: 'Endpoint not found' 
+    }), { status: 404 });
   }
 };

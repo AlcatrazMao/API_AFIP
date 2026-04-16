@@ -8,10 +8,20 @@ dist/
 build/
 *.log
 
-# Environment
+# Environment (global)
 .env
 .env.local
 .env.production
+
+# Server-specific (sensitive)
+server/.env
+server/certs/
+server/certs/*
+!server/certs/.gitkeep
+
+# Worker-specific
+worker/.env
+worker/.dev.vars
 
 # IDE
 .vscode/
@@ -25,9 +35,8 @@ Thumbs.db
 
 # Cloudflare
 .wrangler/
-.dev.vars
 
-# AFIP production credentials
+# AFIP credentials (any folder)
 *.crt
 *.key
 *.pem
