@@ -12,7 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
 import * as path from 'path';
 import * as fs from 'fs';
-import { AfipConfig, AFIP_CODES } from './afip/types.js';
+import { AfipConfig } from './afip/types.js';
 import { getAfipAuth } from './afip/wsaa.js';
 import { createAfipInvoice } from './afip/wsfe.js';
 
@@ -183,7 +183,7 @@ server.post('/process', { preHandler: requireAuth }, async (request, reply) => {
       id: uuidv4(),
       status: 'APPROVED',
       cae: result.cae,
-      caex_vto: result.fecha_vto,
+      cae_vto: result.fecha_vto,
       numero: result.numero,
       invoice_type: body.invoice_type,
       invoice_letter: body.invoice_letter,

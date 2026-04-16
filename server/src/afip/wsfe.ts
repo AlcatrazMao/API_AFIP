@@ -4,13 +4,8 @@
  */
 
 import * as https from 'https';
-import { AfipConfig, AfipAuth, AfipInvoiceRequest, AfipInvoiceResponse, AFIP_CODES } from './types.js';
+import { AfipConfig, AfipAuth, AfipInvoiceRequest, AfipInvoiceResponse } from './types.js';
 import { getAfipAuth } from './wsaa.js';
-
-const WSFE_URLS = {
-  homologacion: 'https://wsfehomo.afip.gov.ar/wsfe/service',
-  produccion: 'https://servicios1.afip.gov.ar/wsfev1/service'
-};
 
 /**
  * Genera el XML para crear un comprobante
@@ -40,7 +35,7 @@ function generateInvoiceXml(
       <token>${auth.token}</token>
       <sign>${auth.sign}</sign>
       <cuit>${config.CUIT}</cuit>
-      <pie>${SERVICE}</pie>
+      <service>wsfe</service>
     </auth>
   </soap:Header>
   <soap:Body>
@@ -82,12 +77,13 @@ async function callWsfe(
   config: AfipConfig
 ): Promise<any> {
   return new Promise((resolve, reject) => {
-    const url = WSFE_URLS[config.environment];
-    const hostname = url.replace('https://', '').replace('/wsfe/service', '');
+    const isProd = config.environment === 'produccion';
+    const hostname = isProd ? 'servicios1.afip.gov.ar' : 'wsfehomo.afip.gov.ar';
+    const path = isProd ? '/wsfev1/service' : '/wsfe/service';
     
     const options = {
       hostname,
-      path: '/wsfe/service',
+      path,
       method: 'POST',
       headers: {
         'Content-Type': 'application/xml',
