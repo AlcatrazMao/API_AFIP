@@ -41,6 +41,9 @@ Thumbs.db
 *.key
 *.pem
 
+# Local PIDs
+.pids.json
+
 # Testing
 coverage/
 
