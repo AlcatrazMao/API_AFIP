@@ -16,12 +16,15 @@
   "dependencies": {
     "fastify": "^5.0.0",
     "dotenv": "^16.4.5",
-    "uuid": "^9.0.1"
+    "uuid": "^10.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.2",
-    "@types/uuid": "^9.0.8",
+    "@types/uuid": "^10.0.0",
     "typescript": "^5.4.5",
     "tsx": "^4.15.6"
+  },
+  "overrides": {
+    "protobufjs": "^7.5.5"
   }
 }
