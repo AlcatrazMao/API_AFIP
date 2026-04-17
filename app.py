@@ -9,14 +9,15 @@ import subprocess
 import threading
 import time
 import requests
+import os
+import sys
 
 # ============================================
 # CONFIGURACIÓN
 # ============================================
 WORKER_URL = "https://afip-api.m-a-o-alcatraz.workers.dev"
-TUNNEL_URL = "https://guide-saskatchewan-circus-moore.trycloudflare.com"
 
-# Colores
+# Colores (Dark theme)
 COLOR_BG = "#1e1e2e"
 COLOR_FG = "#cdd6f4"
 COLOR_ACCENT = "#89b4fa"
@@ -33,7 +34,7 @@ class AfipManager(tk.Tk):
         super().__init__()
 
         self.title("AFIP API Manager")
-        self.geometry("600x500")
+        self.geometry("550x450")
         self.configure(bg=COLOR_BG)
         self.resizable(False, False)
 
@@ -43,18 +44,20 @@ class AfipManager(tk.Tk):
         self.worker_online = False
 
         self.setup_ui()
-        self.check_all_status()
+
+        # Auto-check al abrir
+        self.after(500, self.check_all_status)
 
     def setup_ui(self):
         # Título
         title = tk.Label(
             self,
             text="AFIP API Manager",
-            font=("Arial", 18, "bold"),
+            font=("Arial", 16, "bold"),
             bg=COLOR_BG,
             fg=COLOR_ACCENT,
         )
-        title.pack(pady=15)
+        title.pack(pady=12)
 
         # Frame de status
         status_frame = tk.Frame(self, bg=COLOR_BG)
@@ -63,102 +66,105 @@ class AfipManager(tk.Tk):
         # Worker status
         self.lbl_worker = tk.Label(
             status_frame,
-            text="🌐 Worker: ...",
-            font=("Arial", 12),
+            text="⏳ Worker: checking...",
+            font=("Arial", 11),
             bg=COLOR_BG,
             fg=COLOR_FG,
         )
-        self.lbl_worker.pack(anchor="w", pady=5)
+        self.lbl_worker.pack(anchor="w", pady=4)
 
         # Tunnel status
         self.lbl_tunnel = tk.Label(
             status_frame,
-            text="🔗 Tunnel: ...",
-            font=("Arial", 12),
+            text="⏳ Tunnel: checking...",
+            font=("Arial", 11),
             bg=COLOR_BG,
             fg=COLOR_FG,
         )
-        self.lbl_tunnel.pack(anchor="w", pady=5)
+        self.lbl_tunnel.pack(anchor="w", pady=4)
 
         # Server status
         self.lbl_server = tk.Label(
             status_frame,
-            text="💻 Server: ...",
-            font=("Arial", 12),
+            text="⏳ Server: checking...",
+            font=("Arial", 11),
             bg=COLOR_BG,
             fg=COLOR_FG,
         )
-        self.lbl_server.pack(anchor="w", pady=5)
+        self.lbl_server.pack(anchor="w", pady=4)
 
         # Botones
         btn_frame = tk.Frame(self, bg=COLOR_BG)
-        btn_frame.pack(pady=20)
+        btn_frame.pack(pady=15)
 
         btn_start = tk.Button(
             btn_frame,
-            text="▶️  INICIAR",
+            text="▶ INICIAR",
             command=self.start_services,
             bg=COLOR_SUCCESS,
             fg=COLOR_BG,
-            font=("Arial", 12, "bold"),
-            width=15,
-            height=2,
+            font=("Arial", 10, "bold"),
+            width=12,
             relief="flat",
+            cursor="hand2",
         )
-        btn_start.pack(side="left", padx=10)
+        btn_start.pack(side="left", padx=8)
 
         btn_stop = tk.Button(
             btn_frame,
-            text="⏹️  DETENER",
+            text="⏹ DETENER",
             command=self.stop_services,
             bg=COLOR_ERROR,
             fg=COLOR_BG,
-            font=("Arial", 12, "bold"),
-            width=15,
-            height=2,
+            font=("Arial", 10, "bold"),
+            width=12,
             relief="flat",
+            cursor="hand2",
         )
-        btn_stop.pack(side="left", padx=10)
+        btn_stop.pack(side="left", padx=8)
 
         btn_refresh = tk.Button(
             btn_frame,
-            text="🔄  REFRESCAR",
+            text="🔄 REFRESH",
             command=self.check_all_status,
             bg=COLOR_WARNING,
             fg=COLOR_BG,
-            font=("Arial", 12, "bold"),
-            width=15,
-            height=2,
+            font=("Arial", 10, "bold"),
+            width=12,
             relief="flat",
+            cursor="hand2",
         )
-        btn_refresh.pack(side="left", padx=10)
+        btn_refresh.pack(side="left", padx=8)
 
         # Log area
         log_label = tk.Label(
-            self, text="📋 LOG:", font=("Arial", 10, "bold"), bg=COLOR_BG, fg=COLOR_FG
+            self, text="LOG:", font=("Arial", 9, "bold"), bg=COLOR_BG, fg=COLOR_FG
         )
         log_label.pack(anchor="w", padx=20)
 
         self.log_area = scrolledtext.ScrolledText(
-            self, width=70, height=10, bg="#2a2a3e", fg=COLOR_FG, font=("Consolas", 9)
+            self, width=65, height=8, bg="#2a2a3e", fg=COLOR_FG, font=("Consolas", 8)
         )
-        self.log_area.pack(padx=20, pady=10)
+        self.log_area.pack(padx=20, pady=8)
         self.log_area.config(state="disabled")
 
-        # .Info API
+        # Info
         info = tk.Label(
             self,
             text=f"API: {WORKER_URL}/invoices",
-            font=("Arial", 9),
+            font=("Arial", 8),
             bg=COLOR_BG,
             fg="#666",
         )
         info.pack(pady=5)
 
-    def log(self, message, color=COLOR_FG):
+    def log(self, message, color=None):
         """Agregar mensaje al log"""
+        if color is None:
+            color = COLOR_FG
         self.log_area.config(state="normal")
-        self.log_area.insert("end", message + "\n")
+        ts = time.strftime("%H:%M:%S")
+        self.log_area.insert("end", f"[{ts}] {message}\n")
         self.log_area.see("end")
         self.log_area.config(state="disabled")
 
@@ -168,27 +174,36 @@ class AfipManager(tk.Tk):
             r = requests.get(f"{WORKER_URL}/health", timeout=5)
             if r.status_code == 200:
                 self.worker_online = True
-                self.lbl_worker.config(text="🌐 Worker: ✅ ONLINE", fg=COLOR_SUCCESS)
+                self.lbl_worker.config(text="✅ Worker: ONLINE", fg=COLOR_SUCCESS)
                 return True
-        except:
+        except Exception as e:
             pass
         self.worker_online = False
-        self.lbl_worker.config(text="🌐 Worker: ❌ OFFLINE", fg=COLOR_ERROR)
+        self.lbl_worker.config(text="❌ Worker: OFFLINE", fg=COLOR_ERROR)
         return False
 
     def check_tunnel(self):
-        """Verificar Tunnel"""
+        """Verificar Tunnel - buscar proceso"""
         try:
-            r = requests.get(f"{TUNNEL_URL}/health", timeout=5)
-            if r.status_code == 200:
+            result = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-Command",
+                    "Get-Process | Where-Object {$_.ProcessName -match 'cloudflared'}",
+                ],
+                capture_output=True,
+                timeout=5,
+            )
+            if result.stdout:
                 self.tunnel_online = True
-                self.lbl_tunnel.config(text="🔗 Tunnel: ✅ ONLINE", fg=COLOR_SUCCESS)
-                return True
+                self.lbl_tunnel.config(text="✅ Tunnel: ONLINE", fg=COLOR_SUCCESS)
+            else:
+                self.tunnel_online = False
+                self.lbl_tunnel.config(text="❌ Tunnel: OFFLINE", fg=COLOR_ERROR)
         except:
-            pass
-        self.tunnel_online = False
-        self.lbl_tunnel.config(text="🔗 Tunnel: ❌ OFFLINE", fg=COLOR_ERROR)
-        return False
+            self.tunnel_online = False
+            self.lbl_tunnel.config(text="❌ Tunnel: OFFLINE", fg=COLOR_ERROR)
+        return self.tunnel_online
 
     def check_server(self):
         """Verificar Server local"""
@@ -196,88 +211,110 @@ class AfipManager(tk.Tk):
             r = requests.get("http://localhost:3000/health", timeout=3)
             if r.status_code == 200:
                 self.server_online = True
-                self.lbl_server.config(text="💻 Server: ✅ ONLINE", fg=COLOR_SUCCESS)
+                self.lbl_server.config(text="✅ Server: ONLINE", fg=COLOR_SUCCESS)
                 return True
         except:
             pass
         self.server_online = False
-        self.lbl_server.config(text="💻 Server: ❌ OFFLINE", fg=COLOR_ERROR)
+        self.lbl_server.config(text="❌ Server: OFFLINE", fg=COLOR_ERROR)
         return False
 
     def check_all_status(self):
         """Verificar todos los servicios"""
-        self.log("🔄 Verificando servicios...")
+        self.log("Verificando servicios...")
 
-        threading.Thread(target=self._check_in_background, daemon=True).start()
+        # Habilitamos thread para no bloquear UI
+        threading.Thread(target=self._run_checks, daemon=True).start()
 
-    def _check_in_background(self):
-        self.after(0, lambda: self.check_worker())
-        self.after(0, lambda: self.check_tunnel())
-        self.after(0, lambda: self.check_server())
+    def _run_checks(self):
+        w = self.check_worker()
+        self.after(0, lambda: self.log(f"Worker: {'OK' if w else 'FAIL'}"))
 
-        if self.worker_online and self.tunnel_online and self.server_online:
+        t = self.check_tunnel()
+        self.after(0, lambda: self.log(f"Tunnel: {'OK' if t else 'FAIL'}"))
+
+        s = self.check_server()
+        self.after(0, lambda: self.log(f"Server: {'OK' if s else 'FAIL'}"))
+
+        if w and t and s:
             self.after(
-                0, lambda: self.log("✅ Todos los servicios ONLINE!", COLOR_SUCCESS)
+                0, lambda: self.log("TODO OK - Sistema funcionando!", COLOR_SUCCESS)
             )
         else:
             self.after(
-                0, lambda: self.log("⚠️  Algunos servicios offline", COLOR_WARNING)
+                0,
+                lambda: self.log(
+                    "Revisa los servicios que están OFFLINE", COLOR_WARNING
+                ),
             )
 
     def start_services(self):
         """Iniciar servicios"""
-        self.log("🚀 Iniciando servicios...")
+        self.log("Iniciando servicios...")
 
-        # Ejecutar start-services.ps1
         try:
+            # Buscar el dir del exe/script
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+
             subprocess.Popen(
                 [
                     "powershell.exe",
                     "-ExecutionPolicy",
                     "Bypass",
                     "-File",
-                    "start-services.ps1",
+                    os.path.join(base_dir, "start-services.ps1"),
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                cwd=base_dir,
             )
-            self.log("✅ Servicios iniciados!")
+            self.log("Servicios iniciados!")
             self.after(2000, self.check_all_status)
         except Exception as e:
-            self.log(f"❌ Error: {e}", COLOR_ERROR)
+            self.log(f"Error: {str(e)}", COLOR_ERROR)
 
     def stop_services(self):
         """Detener servicios"""
-        self.log("🛑 Deteniendo servicios...")
+        self.log("Deteniendo servicios...")
 
         try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+
             subprocess.Popen(
                 [
                     "powershell.exe",
                     "-ExecutionPolicy",
                     "Bypass",
                     "-File",
-                    "stop-services.ps1",
+                    os.path.join(base_dir, "stop-services.ps1"),
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                cwd=base_dir,
             )
-            self.log("✅ Servicios detenidos!")
+            self.log("Servicios detenidos!")
+
+            # Resetear labels
+            self.lbl_worker.config(text="⏳ Worker: checking...", fg=COLOR_FG)
+            self.lbl_tunnel.config(text="⏳ Tunnel: checking...", fg=COLOR_FG)
+            self.lbl_server.config(text="⏳ Server: checking...", fg=COLOR_FG)
             self.worker_online = False
             self.tunnel_online = False
             self.server_online = False
-            self.lbl_worker.config(text="🌐 Worker: ...", fg=COLOR_FG)
-            self.lbl_tunnel.config(text="🔗 Tunnel: ...", fg=COLOR_FG)
-            self.lbl_server.config(text="💻 Server: ...", fg=COLOR_FG)
+
         except Exception as e:
-            self.log(f"❌ Error: {e}", COLOR_ERROR)
+            self.log(f"Error: {str(e)}", COLOR_ERROR)
 
 
 # ============================================
 # MAIN
 # ============================================
 if __name__ == "__main__":
-    app = AfipManager()
-    app.mainloop()
+    try:
+        app = AfipManager()
+        app.mainloop()
+    except Exception as e:
+        print(f"Error: {e}")
+        input("Presiona Enter para salir...")
